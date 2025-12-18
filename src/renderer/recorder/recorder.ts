@@ -1,13 +1,5 @@
 /// <reference types="vite/client" />
-
-import {
-    initStyle,
-    getImgUrl,
-    setTitle,
-    Class,
-    cssColor,
-    cssVar,
-} from "../root/root";
+import { initStyle, getImgUrl, setTitle, Class, cssColor } from "../root/root";
 import {
     button,
     check,
@@ -17,7 +9,6 @@ import {
     input,
     label,
     p,
-    trackPoint,
     txt,
 } from "dkh-ui";
 import { t } from "../../../lib/translate/translate";
@@ -28,268 +19,7 @@ initStyle(store);
 
 setTitle(t("录屏"));
 
-type VideoData = {
-    video: EncodedVideoChunk[];
-    audio: EncodedAudioChunk[][];
-};
-
-let recordData: VideoData | null = null;
-
-// 时间单位品牌类型
-type Seconds = number & { __unit: "s" };
-type Milliseconds = number & { __unit: "ms" };
-type Microseconds = number & { __unit: "us" };
-
-// 构造函数
-function seconds(val: number): Seconds {
-    return val as Seconds;
-}
-function milliseconds(val: number): Milliseconds {
-    return val as Milliseconds;
-}
-function microseconds(val: number): Microseconds {
-    return val as Microseconds;
-}
-
-// 转换函数
-function sToMs(s: Seconds): Milliseconds {
-    return milliseconds(s * 1000);
-}
-function msToS(ms: Milliseconds): Seconds {
-    return seconds(ms / 1000);
-}
-function usToS(us: Microseconds): Seconds {
-    return seconds(us / 1_000_000);
-}
-function sToUs(s: Seconds): Microseconds {
-    return microseconds(s * 1_000_000);
-}
-function msToUs(ms: Milliseconds): Microseconds {
-    return microseconds(ms * 1000);
-}
-function usToMs(us: Microseconds): Milliseconds {
-    return milliseconds(us / 1000);
-}
-
-function mathSub<T extends number>(a: T, b: T): T {
-    return (a - b) as T;
-}
-// WebCodecs多音轨录制器
-class WebCodecsRecorder {
-    /** 安全减法，保持类型 */
-    private mathSub<T extends number>(a: T, b: T): T {
-        return (a - b) as T;
-    }
-    private videoTrack: MediaStreamVideoTrack;
-    private audioTracks: MediaStreamAudioTrack[];
-    private videoEncoder: VideoEncoder;
-    private audioEncoders: AudioEncoder[] = [];
-    private videoChunks: EncodedVideoChunk[] = [];
-    private audioChunksList: EncodedAudioChunk[][] = [];
-    public state: "inactive" | "recording" | "paused" = "inactive";
-    private encodedFrames = 0;
-    public ondataavailable?: (data: VideoData) => void;
-    public onstop?: () => void;
-    public rect: [number, number, number, number];
-    /** 录制基准时间（微秒） */
-    private startTimestamp: Microseconds = microseconds(0);
-    /** 暂停累计时长（微秒） */
-    private pausedDuration: Microseconds = microseconds(0);
-    /** 暂停开始时间（微秒） */
-    private pauseStart: Microseconds = microseconds(0);
-
-    constructor(
-        stream: MediaStream,
-        videoConfig: VideoEncoderConfig,
-        audioConfig?: AudioEncoderConfig,
-        rect?: [number, number, number, number],
-    ) {
-        this.videoTrack = stream.getVideoTracks()[0];
-        this.audioTracks = audioConfig ? stream.getAudioTracks() : [];
-        this.videoEncoder = new VideoEncoder({
-            output: (chunk) => this.videoChunks.push(chunk),
-            // todo 警告大小
-            error: (e) => console.error("VideoEncoder error", e),
-        });
-        this.videoEncoder.configure(videoConfig);
-        if (audioConfig) {
-            this.audioTracks.forEach((track, idx) => {
-                this.audioChunksList[idx] = [];
-                const encoder = new AudioEncoder({
-                    output: (chunk) => this.audioChunksList[idx].push(chunk),
-                    error: (e) => console.error("AudioEncoder error", e),
-                });
-                encoder.configure(audioConfig);
-                this.audioEncoders[idx] = encoder;
-            });
-        }
-        this.rect = rect ?? [0, 0, 0, 0];
-    }
-
-    async start() {
-        this.state = "recording";
-        this.encodedFrames = 0;
-        const gopLength = store.get("录屏.超级录屏.关键帧间隔");
-        // 录制基准时间（微秒）
-        this.startTimestamp = microseconds(performance.now() * 1000);
-        this.pausedDuration = microseconds(0);
-        this.pauseStart = microseconds(0);
-        // 视频帧处理
-        const videoReader = new MediaStreamTrackProcessor({
-            track: this.videoTrack,
-        }).readable.getReader();
-        const [cropX, cropY, cropW, cropH] = this.rect;
-        const processVideo = async () => {
-            while (this.state === "recording") {
-                const { value, done } = await videoReader.read();
-                if (done) break;
-                const frame = value;
-                // 计算真实录制时间戳
-                const nowUs = microseconds(performance.now() * 1000);
-                const timestamp = this.mathSub(nowUs, this.startTimestamp);
-                const realTimestamp = this.mathSub(
-                    timestamp,
-                    this.pausedDuration,
-                );
-                if (cropW > 0 && cropH > 0) {
-                    // 真实裁切，生成新帧
-                    const bitmap = await createImageBitmap(
-                        frame,
-                        cropX,
-                        cropY,
-                        cropW,
-                        cropH,
-                    );
-                    const canvas = new OffscreenCanvas(cropW, cropH);
-                    const ctx = canvas.getContext("2d")!;
-                    ctx.drawImage(bitmap, 0, 0, cropW, cropH);
-                    const croppedFrame = new VideoFrame(canvas, {
-                        timestamp: realTimestamp,
-                    });
-                    this.videoEncoder.encode(croppedFrame, {
-                        keyFrame: this.encodedFrames % gopLength === 0,
-                    });
-                    this.encodedFrames++;
-                    croppedFrame.close();
-                    bitmap.close();
-                } else {
-                    // 重新生成 VideoFrame，修正 timestamp
-                    const newFrame = new VideoFrame(frame, {
-                        timestamp: realTimestamp,
-                    });
-                    this.videoEncoder.encode(newFrame);
-                    newFrame.close();
-                }
-                frame.close();
-            }
-        };
-        processVideo();
-        // 多音频轨道处理
-        this.audioTracks.forEach((track, idx) => {
-            const reader = new MediaStreamTrackProcessor({
-                track,
-            }).readable.getReader();
-            const encoder = this.audioEncoders[idx];
-            const processAudio = async () => {
-                while (this.state === "recording") {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    // 计算真实录制时间戳
-                    const nowUs = microseconds(performance.now() * 1000);
-                    const timestamp = this.mathSub(nowUs, this.startTimestamp);
-                    const realTimestamp = microseconds(
-                        timestamp - this.pausedDuration,
-                    );
-                    // todo
-                    // 重新生成 AudioData，修正 timestamp
-                    if (value.format !== null) {
-                        // 获取每个 channel 的数据
-                        const channels = value.numberOfChannels;
-                        const frames = value.numberOfFrames;
-                        const sampleRate = value.sampleRate;
-                        const buffers: Array<Float32Array> = [];
-                        for (let ch = 0; ch < channels; ch++) {
-                            const buf = new Float32Array(frames);
-                            value.copyTo(buf, { planeIndex: ch });
-                            buffers.push(buf);
-                        }
-                        // 合并所有通道数据为一个 ArrayBuffer（交错方式）
-                        const interleaved = new Float32Array(frames * channels);
-                        for (let i = 0; i < frames; i++) {
-                            for (let ch = 0; ch < channels; ch++) {
-                                interleaved[i * channels + ch] = buffers[ch][i];
-                            }
-                        }
-                        const audioData = new AudioData({
-                            format: value.format,
-                            sampleRate,
-                            numberOfFrames: frames,
-                            numberOfChannels: channels,
-                            timestamp: realTimestamp,
-                            data: interleaved.buffer,
-                        });
-                        encoder.encode(audioData);
-                        audioData.close();
-                    } else {
-                        // 兜底：只编码单通道，保证音调正常
-                        try {
-                            const frames = value.numberOfFrames ?? 128;
-                            const sampleRate = value.sampleRate ?? 48000;
-                            const buf = new Float32Array(frames);
-                            if (typeof value.copyTo === "function") {
-                                value.copyTo(buf, { planeIndex: 0 });
-                            }
-                            const audioData = new AudioData({
-                                format: "f32",
-                                sampleRate,
-                                numberOfFrames: frames,
-                                numberOfChannels: 1,
-                                timestamp: realTimestamp,
-                                data: buf.buffer,
-                            });
-                            encoder.encode(audioData);
-                            audioData.close();
-                        } catch {
-                            encoder.encode(value);
-                        }
-                    }
-                }
-            };
-            processAudio();
-        });
-    }
-
-    stop() {
-        this.state = "inactive";
-        this.videoEncoder.flush();
-        for (const enc of this.audioEncoders) enc.flush();
-        this.ondataavailable?.({
-            video: this.videoChunks,
-            audio: this.audioChunksList,
-        });
-        this.onstop?.();
-    }
-
-    pause() {
-        if (this.state !== "recording") return;
-        this.state = "paused";
-        // 记录暂停开始时间
-        this.pauseStart = microseconds(performance.now() * 1000);
-    }
-
-    resume() {
-        if (this.state === "paused") {
-            // 累计暂停时长
-            const nowUs = microseconds(performance.now() * 1000);
-            this.pausedDuration = microseconds(
-                this.pausedDuration + (nowUs - this.pauseStart),
-            );
-            this.state = "recording";
-        }
-    }
-}
-
-let recorder: WebCodecsRecorder;
+let recorder: MediaRecorder;
 
 /** 临时保存的原始视频位置 */
 let tmpPath: string;
@@ -301,6 +31,8 @@ let stop = false;
 
 const clipTime = Number(store.get("录屏.转换.分段")) * 1000;
 
+const nameT: { s: number; e: number }[] = [{ s: 0, e: Number.NaN }];
+
 const timeL: number[] = [];
 function pTime() {
     const t = Date.now();
@@ -309,6 +41,18 @@ function pTime() {
     for (let i = 0; i < timeL.length; i += 2) {
         if (timeL[i + 1]) d += timeL[i + 1] - timeL[i];
     }
+}
+function getT() {
+    let t = 0;
+    for (let i = 1; i < timeL.length - 1; i += 2) {
+        t += timeL[i] - timeL[i - 1];
+    }
+    if (timeL.length % 2 === 0) {
+        t += Date.now() - (timeL.at(-2) as number);
+    } else {
+        t += Date.now() - (timeL.at(-1) as number);
+    }
+    return t;
 }
 function setTime(t: string) {
     renderSend("recordTime", [t]);
@@ -342,7 +86,7 @@ type mimeType =
     | "ts"
     | "mpeg"
     | "flv";
-const lastType = store.get("录屏.转换.格式") as mimeType;
+let type = store.get("录屏.转换.格式") as mimeType;
 
 const audioStreamS = new Map<string, MediaStream>();
 let stream: MediaStream;
@@ -351,22 +95,12 @@ const sysAudioName = "00";
 
 let rect: [number, number, number, number];
 
-import {
-    Output,
-    WebMOutputFormat,
-    Mp4OutputFormat,
-    BufferTarget,
-    EncodedVideoPacketSource,
-    EncodedPacket,
-    EncodedAudioPacketSource,
-} from "mediabunny";
-
 // biome-ignore format:
 const spawn = require("node:child_process").spawn as typeof import("child_process").spawn;
 const fs = require("node:fs") as typeof import("fs");
 const os = require("node:os") as typeof import("os");
 const path = require("node:path") as typeof import("path");
-import { renderOn, renderSend, renderSendSync } from "../../../lib/ipc";
+import { renderOn, renderSend } from "../../../lib/ipc";
 import type { IconType } from "../../iconTypes";
 import { typedEntries } from "../../../lib/utils";
 let pathToFfmpeg = "ffmpeg";
@@ -375,7 +109,6 @@ if (process.platform === "win32" || process.platform === "darwin") {
     const n = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
     pathToFfmpeg = path.join(p, n);
 }
-// todo 在导出检测
 const start = spawn(pathToFfmpeg, ["-version"]);
 start.on("error", () => {
     const m =
@@ -391,13 +124,80 @@ start.on("error", () => {
 });
 console.log(pathToFfmpeg);
 
+/** 自动分段 */
+function c() {
+    if (clipTime === 0) return;
+    setTimeout(() => {
+        if (!stop) {
+            recorder.stop();
+            c();
+        }
+    }, clipTime);
+}
+
 function cameraStreamF(b: boolean) {
     renderSend("recordCamera", [b]);
 }
 
+function resize() {
+    const p = {
+        h: videoPEl.el.offsetHeight,
+        w: videoPEl.el.offsetWidth,
+    };
+    const c = {
+        h: vpEl.el.offsetHeight,
+        w: vpEl.el.offsetWidth,
+    };
+    const k0 = p.h / p.w;
+    const k1 = c.h / c.w;
+    if (k0 >= k1) {
+        console.log(p.w, c.w);
+        // @ts-ignore
+        vpEl.el.style.zoom = p.w / c.w;
+    } else {
+        // @ts-ignore
+        vpEl.el.style.zoom = p.h / c.h;
+    }
+}
+
+let editting = false;
+
+function setVideo(n: number) {
+    videoEl.src = `${tmpPath}/${n}`;
+}
+
+/** 获取绝对时间 */
+function getPlayT() {
+    let t = 0;
+    for (let i = 0; i < playName; i++) {
+        t += nameT[i].e - nameT[i].s;
+    }
+    t += videoEl.currentTime * 1000;
+    return t;
+}
+
 /** 通过绝对时间设定视频和其相对时间 */
-function setPlayT(time: Milliseconds) {
-    videoEl.currentTime = msToS(time);
+function setPlayT(time: number) {
+    const x = getTimeInV(time);
+    setVideo(x.v);
+    playName = x.v;
+    videoEl.currentTime = x.time / 1000;
+}
+
+/** 获取绝对时间对应的视频和相对时间 */
+function getTimeInV(time: number) {
+    for (let i = 0; i < nameT.length; i++) {
+        if (
+            nameT[i].s <= time &&
+            (time < nameT?.[i + 1]?.s || time <= nameT[i].e)
+        ) {
+            return {
+                v: i,
+                time: Math.min(time - nameT[i].s, nameT[i].e - nameT[i].s),
+            };
+        }
+    }
+    return { v: 0, time: 0 };
 }
 
 function getAudioNames() {
@@ -407,29 +207,48 @@ function getAudioNames() {
 }
 
 function showControl() {
+    editting = true;
     playEl.sv(true);
     if (cameraEl.gv) cameraStreamF(false);
+    sEl.class("s_show");
     settingEl.style({ display: "none" });
     mEl.style({ backgroundColor: cssColor.bg });
     videoPEl.style({ transform: "" });
+    segEl.remove();
+    setVideo(0);
+    videoEl.style.left = `${-rect[0]}px`;
+    videoEl.style.top = `${-rect[1]}px`;
+    vpEl.style({
+        width: `${rect[2]}px`,
+        minWidth: `${rect[2]}px`,
+        height: `${rect[3]}px`,
+        minHeight: `${rect[3]}px`,
+    });
+    clipV();
     saveEl.el.disabled = false;
     renderSend("windowMax", []);
+
+    setTimeout(() => {
+        resize();
+        mEl.style({ transition: "none" });
+    }, 400);
 }
 
-function getAvailableDuration() {
-    return (jdtEl.gv.max -
-        (jdtEl.gv.startTrim + jdtEl.gv.endTrim)) as Milliseconds;
-}
+let playName = 0;
 
 function clipV() {
-    tStartEl.sv(milliseconds(0));
-    tEndEl.sv(milliseconds(0));
+    tStartEl.sv(0);
+    setEnd();
 
-    tTEl.sv(tFormat(getAvailableDuration()));
-    tNtEl.sv(tFormat(milliseconds(0)));
+    tTEl.sv(tFormat(tEndEl.gv - tStartEl.gv));
+    tNtEl.sv(tFormat(0));
 }
 
-function tFormat(x: Milliseconds) {
+/**
+ *
+ * @param x 输入秒
+ */
+function tFormat(x: number) {
     const t = x;
     const s = Math.trunc(t / 1000);
     const m = Math.trunc(s / 60);
@@ -444,201 +263,272 @@ function videoPlay() {
     videoEl.play();
 }
 
-/**
- * 对首个GOP进行重新解码编码，实现精确剪辑
- * @param gopChunks GOP内所有chunk
- * @param startUs 剪辑起始时间（微秒）
- * @param decoderConfig 解码器配置
- * @returns 重新编码后的chunk数组
- */
-async function reencodeGopForStart(
-    gopChunks: EncodedVideoChunk[],
-    startUs: Microseconds,
-    decoderConfig: VideoDecoderConfig,
-): Promise<EncodedVideoChunk[]> {
-    // 解码GOP所有chunk
-    const frames: VideoFrame[] = [];
-    // todo ai 说这样写promise就这样吧，以后在处理
-    await new Promise<void>((resolve) => {
-        const decoder = new VideoDecoder({
-            output: (frame) => frames.push(frame),
-            error: (e) => console.error("GOP解码错误", e),
-        });
-        decoder.configure(decoderConfig);
-        for (const chunk of gopChunks) decoder.decode(chunk);
-        decoder.flush().then(resolve);
-    });
-    // 只保留 timestamp >= startUs 的帧
-    const filteredFrames = frames.filter(
-        (f) => (f.timestamp as Microseconds) >= startUs,
-    );
-    // 重新编码
-    const encoded: EncodedVideoChunk[] = [];
-    await new Promise<void>((resolve) => {
-        const encoder = new VideoEncoder({
-            output: (chunk) => encoded.push(chunk),
-            error: (e) => console.error("GOP编码错误", e),
-        });
-        encoder.configure({
-            ...decoderConfig,
-            width: filteredFrames[0]?.displayWidth ?? 1280,
-            height: filteredFrames[0]?.displayHeight ?? 720,
-        });
-        for (const frame of filteredFrames) encoder.encode(frame);
-        encoder.flush().then(resolve);
-    });
-    for (const f of frames) f.close();
-    return encoded;
-}
-
-async function clipVideoData(
-    data: VideoData,
-    start: Milliseconds,
-    end: Milliseconds,
-) {
-    // 视频部分：只保留涉及的GOP（关键帧及其后续帧）
-    const videoChunks = data.video;
-    // 找到起始关键帧
-    const startUs = msToUs(start);
-    const endUs = msToUs(end);
-    let startIdx = 0;
-    let endIdx = videoChunks.length - 1;
-    for (let i = 0; i < videoChunks.length; i++) {
-        const chunk = videoChunks[i];
-        if (chunk.timestamp >= startUs && chunk.type === "key") {
-            startIdx = i;
-            break;
+const clipPath: string[] = [];
+let isClipRun = false;
+/** 获取要切割的视频和位置 */
+async function clip() {
+    if (isClipRun) return;
+    isClipRun = true;
+    const start = tStartEl.gv;
+    const end = tEndEl.gv;
+    const startV = getTimeInV(start);
+    const endV = getTimeInV(end);
+    const output1 = path.join(tmpPath, "output1");
+    try {
+        fs.rmSync(output1, { recursive: true });
+    } catch (error) {}
+    fs.mkdirSync(output1);
+    function toArg(
+        v: number,
+        t: number,
+        a: "start" | "end" | "both",
+        t2: number,
+    ) {
+        const args: (string | number)[] = [];
+        args.push("-i", path.join(output, `${v}.${type}`));
+        if (a === "start") {
+            args.push("-ss", t / 1000);
+        } else if (a === "end") {
+            args.push("-to", t / 1000);
+        } else {
+            args.push("-ss", t / 1000, "-to", t2 / 1000);
+        }
+        args.push(path.join(output1, `${v}.${type}`));
+        return args.map((i) => String(i));
+    }
+    if (startV.v + 1 < endV.v) {
+        for (let i = startV.v + 1; i < endV.v; i++) {
+            fs.copyFileSync(
+                path.join(output, `${i}.${type}`),
+                path.join(output1, `${i}.${type}`),
+            );
         }
     }
-    for (let i = startIdx; i < videoChunks.length; i++) {
-        const chunk = videoChunks[i];
-        if (chunk.timestamp > endUs && chunk.type === "key") {
-            endIdx = i - 1;
-            break;
-        }
-    }
-    // GOP优化：如果 startUs > 第一个关键帧 timestamp，则对首GOP重新解码编码
-    let clippedVideo: EncodedVideoChunk[] = [];
-    const decoderConfig = {
-        codec: "vp8",
-        hardwareAcceleration: "no-preference",
-    } as const;
-    if (startIdx > 0 && startUs > videoChunks[startIdx].timestamp) {
-        // 找到首GOP所有chunk
-        const gopStart = startIdx;
-        let gopEnd = startIdx;
-        for (let i = gopStart + 1; i <= endIdx; i++) {
-            if (videoChunks[i].type === "key") {
-                gopEnd = i - 1;
-                break;
-            }
-            gopEnd = i;
-        }
-        // 重新解码编码首GOP
-        // 注意：此处为异步，需在调用处 await
-        // 其余GOP直接保留
-        const beforeGop = videoChunks.slice(startIdx, gopEnd + 1);
-        // 重新编码首GOP
-        const reencoded = await reencodeGopForStart(
-            beforeGop,
-            startUs,
-            decoderConfig,
+    for (let i = startV.v; i <= endV.v; i++) {
+        clipPath.push(
+            path
+                .join(output1, `${i}.${type}`)
+                .replaceAll(path.sep, path.posix.sep),
         );
-        clippedVideo = reencoded.concat(
-            videoChunks.slice(gopEnd + 1, endIdx + 1),
+    }
+    if (startV.v === endV.v) {
+        await runFfmpeg(
+            "clip",
+            0,
+            toArg(startV.v, startV.time, "both", endV.time),
         );
     } else {
-        clippedVideo = videoChunks.slice(startIdx, endIdx + 1);
-    }
-    // 音频部分：按时间裁剪
-    const clippedAudio: EncodedAudioChunk[][] = [];
-    for (const trackChunks of data.audio) {
-        const arr = trackChunks.filter(
-            (chunk) => chunk.timestamp >= startUs && chunk.timestamp <= endUs,
-        );
-        clippedAudio.push(arr);
-    }
-    return {
-        video: clippedVideo,
-        audio: clippedAudio,
-    };
-}
-
-async function clipAndSave(data: VideoData, filepath: string) {
-    // todo
-    const rdata = await clipVideoData(
-        data,
-        milliseconds(tStartEl.gv),
-        mathSub(jdtEl.gv.max, milliseconds(tEndEl.gv)),
-    );
-    if (格式El.el.gv === "mp4") {
-        await saveMp4(rdata, filepath);
+        await Promise.all([
+            runFfmpeg("clip", 0, toArg(startV.v, startV.time, "start", 0)),
+            runFfmpeg("clip", 1, toArg(endV.v, endV.time, "end", 0)),
+        ]);
     }
 }
 
-async function saveMp4(data: VideoData, filepath: string) {
-    const exportPath = filepath;
-    const output = new Output({
-        format: new Mp4OutputFormat(),
-        target: new BufferTarget(),
-    });
-
-    // @ts-expect-error
-    const videoSource = new EncodedVideoPacketSource(codec);
-    output.addVideoTrack(videoSource, {
-        frameRate: srcRate,
-    });
-
-    const audioSources: EncodedAudioPacketSource[] = [];
-    for (const trackChunks of data.audio) {
-        const audioSource = new EncodedAudioPacketSource("opus");
-        output.addAudioTrack(audioSource);
-        audioSources.push(audioSource);
+function joinAndSave(filepath: string) {
+    if (clipPath.length === 1) {
+        fs.cpSync(clipPath[0], filepath);
+        ffprocess.join[0] = { args: [], finish: "ok", logs: [], testCom: "" };
+        updataPrEl(ffprocess);
+        return;
     }
+    const args: string[] = [];
 
-    await output.start();
-
-    for (const [_, chunk] of data.video.entries()) {
-        await videoSource.add(EncodedPacket.fromEncodedChunk(chunk), {
-            decoderConfig: {
-                ...decoderVideoConfig,
-                codedWidth: outputV.width,
-                codedHeight: outputV.height,
-            },
-        });
-    }
-    for (const trackChunks of data.audio) {
-        const audioSource = audioSources.shift()!;
-        for (const [_, chunk] of trackChunks.entries()) {
-            await audioSource.add(EncodedPacket.fromEncodedChunk(chunk), {
-                decoderConfig: {
-                    codec: "opus",
-                    numberOfChannels: 2,
-                    sampleRate: 48000,
-                },
-            }); // todo
+    // 针对不同格式的合并（用switch还要加上作用域的话缩进就太多了）
+    if (type === "gif") {
+        for (const i of clipPath) {
+            args.push("-i", i);
         }
+        args.push("-filter_complex");
+        let t = "";
+        for (const i in clipPath) {
+            t += `[${i}:v:0]`;
+        }
+        t += `concat=n=${clipPath.length}:v=1[outv]`;
+        args.push(`"${t}"`, "-map", '"[outv]"');
+    } else if (
+        type === "webm" ||
+        type === "mp4" ||
+        type === "ts" ||
+        type === "mkv" ||
+        type === "mov" ||
+        type === "flv" ||
+        type === "mpeg"
+    ) {
+        let t = "";
+        for (const i of clipPath) {
+            t += `file ${i}\n`;
+        }
+        const textPath = path.join(tmpPath, "output1", "x.txt");
+        fs.writeFileSync(textPath, t);
+        args.push("-f", "concat", "-safe", "0", "-i", textPath, "-c", "copy");
+    } else if (type === "avi") {
     }
-    await output.finalize();
-    const { buffer } = output.target;
-    if (buffer) {
-        fs.writeFileSync(exportPath, Buffer.from(buffer)); // todo stream
-        console.log("saved mp4");
-        renderSend("ok_save", [exportPath, true]);
-    } else {
-        // todo
-    }
+    args.push(filepath);
+
+    runFfmpeg("join", 0, args).then((r) => {
+        if (r) renderSend("ok_save", [filepath, true]);
+    });
 }
 
 async function save() {
     store.set("录屏.转换.格式", 格式El.el.gv);
-    const t = renderSendSync("recordSavePath", [格式El.el.gv]);
-    if (t && recordData) {
-        clipAndSave(recordData, t);
+    renderSend("recordSavePath", [type]); // todo 可以使用promise控制流程
+}
+
+let savePath = "";
+let isTsOk = false;
+
+const prText = {
+    wait: {
+        ts: "等待转换",
+        clip: "等待裁剪",
+        join: "等待合并",
+    },
+    running: {
+        ts: "正在转换",
+        clip: "正在裁剪",
+        join: "正在合并",
+    },
+    ok: {
+        ts: "转换完成",
+        clip: "裁剪完成",
+        join: "合并完成",
+    },
+    error: {
+        ts: "转换失败",
+        clip: "裁剪失败",
+        join: "合并失败",
+    },
+};
+
+for (const [_, v] of typedEntries(prText)) {
+    for (const [j] of typedEntries(v)) {
+        v[j] = t(v[j]);
     }
 }
 
-function updataPrEl() {}
+function setFFState(type: keyof typeof prEl, n: number, state: prst) {
+    ffprocess[type][n].finish = state;
+    if (
+        type === "ts" &&
+        Object.values(ffprocess[type]).every((i) => i.finish === "ok")
+    ) {
+        if (savePath) {
+            clip()
+                .then(() => joinAndSave(savePath))
+                .catch(() => {
+                    isClipRun = false;
+                });
+        }
+    }
+}
+
+function updataPrEl(pr: typeof ffprocess) {
+    for (const i in pr) {
+        const key = i as "ts" | "clip" | "join";
+        const prILen = Object.keys(pr[key]).length;
+        if (prILen === 0) {
+            prEl[key].el.innerText = `${prText.wait[key]}`;
+        } else {
+            const stI: { [key in prst]: number } = {
+                ok: 0,
+                err: 0,
+                running: 0,
+            };
+            for (const j in pr[key]) {
+                stI[pr[key][j].finish]++;
+            }
+            if (stI.err > 0) {
+                prEl[key].el.innerText =
+                    `${prText.error[key]} ${t("点击重试")}`;
+                prEl[key].class("pro_error");
+                prEl[key].el.onclick = () => {
+                    for (const i in pr[key]) {
+                        if (pr[key][i].finish === "err") {
+                            runFfmpeg(key, Number(i), pr[key][i].args);
+                        }
+                    }
+                    logText.el.value += "\n\n重试\n\n";
+                };
+                logP.el.classList.remove("hide_log");
+                for (const i in pr[key]) {
+                    if (pr[key][i].finish === "err") {
+                        logText.el.value += `\n命令：\n${pr[key][i].testCom}\n\n输出：\n${pr[key][i].logs.map((i) => i.text).join("\n")}`;
+                    }
+                }
+                logText.el.scrollTop = logText.el.scrollHeight;
+            } else if (stI.ok === prILen) {
+                prEl[key].el.innerText = `${prText.ok[key]}`;
+                prEl[key].el.style.width = "100%";
+                prEl[key].class("pro_ok");
+                if (key === "ts") {
+                    isTsOk = true;
+                    if (!savePath) {
+                        prEl[key].el.innerText += ` ${t("等待保存")}`;
+                    }
+                }
+            } else {
+                prEl[key].el.innerText =
+                    `${prText.running[key]} ${stI.running}/${prILen}`;
+                prEl[key].el.style.width = `${(stI.running / prILen) * 100}%`;
+                prEl[key].class("pro_running");
+            }
+        }
+    }
+}
+
+type prst = "ok" | "err" | "running";
+
+type P = {
+    [k: number]: {
+        args: string[];
+        testCom: string;
+        logs: { text: string }[];
+        finish: "ok" | "err" | "running";
+    };
+};
+const ffprocess: {
+    [key in "ts" | "clip" | "join"]: P;
+} = {
+    ts: {},
+    clip: {},
+    join: {},
+};
+
+function runFfmpeg(type: "ts" | "clip" | "join", n: number, args: string[]) {
+    const ffmpeg = spawn(pathToFfmpeg, args);
+    ffprocess[type][n] = {
+        args,
+        testCom: `ffmpeg ${args.join(" ")}`,
+        finish: "running",
+        logs: [],
+    };
+    updataPrEl(ffprocess);
+    return new Promise<boolean>((re, rj) => {
+        ffmpeg.on("close", (code) => {
+            if (code === 0) {
+                setFFState(type, n, "ok");
+                updataPrEl(ffprocess);
+                console.log(ffprocess);
+                re(true);
+            } else {
+                setFFState(type, n, "err");
+                updataPrEl(ffprocess);
+                console.log(ffprocess);
+                rj(false);
+            }
+        });
+        ffmpeg.stdout.on("data", (data: Uint8Array) => {
+            ffprocess[type][n].logs.push({ text: data.toString() });
+            console.log(data.toString());
+        });
+        ffmpeg.stderr.on("data", (data: Uint8Array) => {
+            ffprocess[type][n].logs.push({ text: data.toString() });
+            console.log(data.toString());
+        });
+    });
+}
 
 function iconEl(src: IconType) {
     return image(getImgUrl(`${src}.svg`), "icon").class("icon");
@@ -650,88 +540,35 @@ function iconBEl(src: IconType) {
 class time_i extends HTMLElement {
     _value = 0;
     _min = 0;
-    _max = Number.POSITIVE_INFINITY;
-    // 用函数实现input的+-控件，支持value读写、step/max/min
-    _step = 1;
-    _inputView = this.createInputView();
-    createInputView() {
-        const container = document.createElement("span");
-        const minus = document.createElement("button");
-        minus.textContent = "-";
-        const plus = document.createElement("button");
-        plus.textContent = "+";
-        container.appendChild(minus);
-        container.appendChild(plus);
-        let _value = this._value;
-        let _step = this._step;
-        let _max = this._max;
-        let _min = this._min;
-        const obj = {
-            el: container,
-            get value() {
-                return _value;
-            },
-            set value(v: number) {
-                _value = Math.max(_min, Math.min(_max, Number(v)));
-            },
-            get step() {
-                return _step;
-            },
-            set step(v: number) {
-                _step = Number(v) || 1;
-            },
-            get max() {
-                return _max;
-            },
-            set max(v: number) {
-                _max = Number(v) || 0;
-            },
-            get min() {
-                return _min;
-            },
-            set min(v: number) {
-                _min = Number(v) || 0;
-            },
-            addEventListener(
-                ...args: Parameters<typeof container.addEventListener>
-            ) {
-                container.addEventListener(...args);
-            },
-        };
-        minus.onclick = () => {
-            obj.value = obj.value - obj.step;
-            obj.el.dispatchEvent(new Event("input"));
-        };
-        plus.onclick = () => {
-            obj.value = obj.value + obj.step;
-            obj.el.dispatchEvent(new Event("input"));
-        };
-        return obj;
-    }
+    _max = 0;
+    input = document.createElement("input");
 
     connectedCallback() {
+        this._value = Number(this.getAttribute("value")) || 0;
+        this._min = Number(this.getAttribute("min")) || 0;
+        this._max = Number(this.getAttribute("max")) || 0;
         const i = document.createElement("span");
-        i.classList.add(Class.mono);
         this.appendChild(i);
         i.innerHTML = `<span contenteditable="true"></span>:<span contenteditable="true"></span>:<span contenteditable="true"></span>.<span contenteditable="true"></span>`;
-        this._inputView = this.createInputView();
-        this.appendChild(this._inputView.el);
-        this._inputView.max = this._max;
-        this._inputView.min = this._min;
-        this._inputView.value = this._value;
+        const 加减 = this.input;
+        加减.type = "number";
+        this.appendChild(加减);
+        加减.max = this._max.toString();
+        加减.min = this._min.toString();
+        加减.value = this._value.toString();
         const [h, m, s, ss] = i.querySelectorAll("span");
 
         h.onfocus = () => {
-            this._inputView.step = 3600000;
+            加减.step = "3600000";
         };
         m.onfocus = () => {
-            this._inputView.step = 60000;
+            加减.step = "60000";
         };
         s.onfocus = () => {
-            this._inputView.step = 1000;
+            加减.step = "1000";
         };
         ss.onfocus = () => {
-            this._inputView.step = 1;
+            加减.step = "1";
         };
 
         h.oninput = () => {
@@ -777,22 +614,22 @@ class time_i extends HTMLElement {
                         this.sum_value() < this._min
                     ) {
                         el.innerText = dv;
-                        this._inputView.value = this.sum_value();
+                        加减.value = this.sum_value().toString();
                     } else {
                         this._value = this.sum_value();
-                        this._inputView.value = this.sum_value();
+                        加减.value = this.sum_value().toString();
                     }
                 } else {
                     el.innerText = dv;
-                    this._inputView.value = this.sum_value();
+                    加减.value = this.sum_value().toString();
                 }
             }
         };
 
-        this._inputView.addEventListener("input", () => {
-            this.set_value(this._inputView.value);
+        加减.oninput = () => {
+            this.set_value(Number(加减.value));
             this.dispatchEvent(new Event("input"));
-        });
+        };
     }
 
     n(el: HTMLSpanElement) {
@@ -811,7 +648,7 @@ class time_i extends HTMLElement {
         h.innerText = String(hn);
         m.innerText = String(mn - 60 * hn);
         s.innerText = String(sn - 60 * mn).padStart(2, "0");
-        ss.innerText = String(Math.round(tn)).padStart(3, "0");
+        ss.innerText = String(tn).padStart(3, "0");
     }
 
     sum_value() {
@@ -829,7 +666,7 @@ class time_i extends HTMLElement {
     set value(v: number) {
         this.set_value(v);
         this.setAttribute("value", String(v));
-        if (this._inputView) this._inputView.value = v;
+        this.input.value = v.toString();
     }
     get max() {
         return this._max;
@@ -838,41 +675,34 @@ class time_i extends HTMLElement {
         const v = Number(x) || 0;
         this._max = v;
         this.setAttribute("max", String(v));
-        if (this._inputView) this._inputView.max = v;
+        this.input.max = v.toString();
     }
     get min() {
-        return this._min as Milliseconds;
+        return this._min;
     }
     set min(x) {
         const v = Number(x) || 0;
         this._max = v;
         this.setAttribute("min", String(v));
-        if (this._inputView) this._inputView.min = v;
+        this.input.min = v.toString();
     }
     get gv() {
-        return this.value as Milliseconds;
+        return this.value;
     }
-    sv(v: Milliseconds) {
+    sv(v: number) {
         this.value = v;
     }
-    set svc(v: Milliseconds) {
+    set svc(v: number) {
         this.value = v;
     }
 }
 
 window.customElements.define("time-i", time_i);
 
-const mEl = view("y")
-    .style({
-        width: "100vw",
-        height: "100vh",
-        alignItems: "center",
-        overflow: "hidden",
-        padding: cssVar("o-padding"),
-    })
-    .addInto();
+const mEl = view().attr({ id: "m" }).addInto();
 const startStop = button()
     .add(iconEl("start_record").style({ filter: "none" }))
+    .attr({ id: "start_stop" })
     .style({ width: "80px", height: "80px" })
     .on("click", () => {
         if (sS) {
@@ -888,6 +718,8 @@ const startStop = button()
                 for (const i of a.getAudioTracks()) stream.addTrack(i);
             }
             recorder.start();
+            格式El.el.style({ display: "none" });
+            type = 格式El.el.gv as mimeType;
             startStop
                 .clear()
                 .add(iconEl("stop_record").style({ filter: "none" }));
@@ -903,6 +735,8 @@ const startStop = button()
             setInterval(getTime, 500);
             sS = false;
             renderSend("recordStart", []);
+
+            c();
         } else {
             stop = true;
             recorder.stop();
@@ -933,14 +767,16 @@ const cancelEl = iconBEl("close").on("click", () => {
     renderSend("windowClose", []);
 });
 
-const cameraEl = check("camera").on("click", () => {
-    try {
-        cameraStreamF(cameraEl.gv);
-        store.set("录屏.摄像头.开启", cameraEl.gv);
-    } catch (e) {
-        console.error(e);
-    }
-});
+const cameraEl = check("camera")
+    .attr({ id: "camera" })
+    .on("click", () => {
+        try {
+            cameraStreamF(cameraEl.gv);
+            store.set("录屏.摄像头.开启", cameraEl.gv);
+        } catch (e) {
+            console.error(e);
+        }
+    });
 const micList = view("y");
 
 const 格式El = dynamicSelect();
@@ -955,7 +791,7 @@ const types: mimeType[] = [
     "flv",
 ];
 格式El.setList(types.map((i) => ({ value: i, text: i })));
-格式El.el.el.value = lastType;
+格式El.el.el.value = type;
 
 const settingEl = view("y")
     .style({
@@ -966,13 +802,13 @@ const settingEl = view("y")
         height: "100vh",
         alignItems: "center",
         justifyContent: "center",
-        background: cssColor.bg,
     })
     .class(Class.gap)
     .add([
         startStop,
         view("y")
             .add([
+                view("y").add([t("格式"), 格式El.el]),
                 view("y").add([t("选择输入音频"), micList]),
                 view("y").add([t("摄像头"), label([cameraEl, t("开启")])]),
             ])
@@ -988,359 +824,10 @@ const waitTip = ele("dialog")
     .addInto();
 waitTip.el.showModal();
 
-const videoPEl = view("y")
-    .style({
-        flexGrow: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: 0,
-        minWidth: 0,
-    })
-    .addInto(mEl);
-
-// WebCodecs 播放器组件
-class WebCodecsPlayer {
-    private canvas: HTMLCanvasElement;
-    private ctx: CanvasRenderingContext2D;
-    private audioCtx: AudioContext | null = null;
-    private videoDecoder: VideoDecoder | null = null;
-    private audioDecoders: AudioDecoder[] = [];
-    private audioBuffers: AudioBuffer[] = [];
-    private audioBufferSource: AudioBufferSourceNode | null = null;
-    private videoChunks: EncodedVideoChunk[] = [];
-    private audioChunksList: EncodedAudioChunk[][] = [];
-    private playing = false;
-    private rafId: number | null = null;
-    private _duration: Seconds = seconds(0);
-    private _currentTime: Seconds = seconds(0);
-    private startTime: Milliseconds = milliseconds(0);
-    private currentFrameIdx = -1;
-    private lastKeyFrameIdx = 0;
-    private lastDecodedFrame: VideoFrame | null = null;
-    private decodeQueue: number[] = [];
-    private isDecoding = false;
-    public onended?: () => void;
-    public onplay?: () => void;
-    public onpause?: () => void;
-    public ontimeupdate?: () => void;
-
-    constructor(parent: HTMLElement) {
-        this.canvas = document.createElement("canvas");
-        this.canvas.style.maxWidth = "100%";
-        this.canvas.style.maxHeight = "100%";
-        this.ctx = this.canvas.getContext("2d")!;
-        parent.appendChild(this.canvas);
-    }
-
-    async setVideoData(data: VideoData, width = 1280, height = 720) {
-        this.videoChunks = data.video;
-        this.audioChunksList = data.audio;
-        this.audioBuffers = [];
-        this.currentFrameIdx = -1;
-        this._currentTime = seconds(0);
-        this.canvas.width = width;
-        this.canvas.height = height;
-        this.lastDecodedFrame?.close();
-        this.lastDecodedFrame = null;
-        this.decodeQueue = [];
-        this.isDecoding = false;
-        if (!this.videoDecoder) {
-            this.videoDecoder = new VideoDecoder({
-                output: (frame) => this.handleDecodedFrame(frame),
-                error: (e) => console.error("VideoDecoder error", e),
-            });
-        }
-        this.videoDecoder.configure(decoderVideoConfig);
-        await this.decodeAudio();
-        if (this.videoChunks.length > 0) {
-            const lastChunk = this.videoChunks.at(-1)!;
-            this._duration = usToS(lastChunk.timestamp as Microseconds);
-        } else {
-            this._duration = seconds(0);
-        }
-    }
-
-    // 按需解码关键帧到目标帧，解码队列驱动
-    private handleDecodedFrame(frame: VideoFrame) {
-        // 只保留当前帧
-        if (this.lastDecodedFrame) this.lastDecodedFrame.close();
-        this.lastDecodedFrame = frame;
-        this.isDecoding = false;
-    }
-
-    private findKeyFrameIdx(idx: number): number {
-        for (let i = idx; i >= 0; i--) {
-            if (this.videoChunks[i].type === "key") return i;
-        }
-        return 0;
-    }
-
-    /**
-     * 连续播放时从上次解码位置继续解码到目标帧，只有seek/跳转时才从关键帧头开始
-     */
-    private async decodeToFrame(
-        idx: number,
-        forceFlush = false,
-    ): Promise<VideoFrame | null> {
-        if (!this.videoChunks.length || !this.videoDecoder) return null;
-        this.isDecoding = true;
-        let startIdx: number;
-        // seek/跳转时，从关键帧头开始
-        if (forceFlush) {
-            startIdx = this.findKeyFrameIdx(idx);
-            // 关闭上一次帧
-            if (this.lastDecodedFrame) {
-                this.lastDecodedFrame.close();
-                this.lastDecodedFrame = null;
-            }
-            await this.videoDecoder.flush();
-        } else {
-            // 连续播放时，从上次解码到的位置继续
-            startIdx = this.currentFrameIdx;
-            // 如果当前帧已经是目标帧，直接返回
-            if (startIdx === idx && this.lastDecodedFrame) {
-                this.isDecoding = false;
-                return this.lastDecodedFrame;
-            }
-            startIdx++;
-            if (startIdx > idx) {
-                startIdx = this.findKeyFrameIdx(idx);
-                if (this.lastDecodedFrame) {
-                    this.lastDecodedFrame.close();
-                    this.lastDecodedFrame = null;
-                }
-                await this.videoDecoder.flush();
-            }
-        }
-
-        // 依次decode到目标帧
-        for (let i = startIdx; i <= idx; i++) {
-            this.videoDecoder.decode(this.videoChunks[i]);
-        }
-        if (forceFlush) await this.videoDecoder.flush();
-        this.isDecoding = false;
-        if (!this.lastDecodedFrame) {
-            console.warn(`decodeToFrame: 未能解码到目标帧 idx=${idx}`);
-            return null;
-        }
-        this.currentFrameIdx = idx;
-        return this.lastDecodedFrame;
-    }
-
-    private async decodeAudio() {
-        if (this.audioChunksList.length === 0) return;
-        this.audioBuffers = [];
-        this.audioDecoders = [];
-        if (!this.audioCtx) {
-            this.audioCtx = new window.AudioContext();
-        }
-
-        // 只处理第一轨道
-        const chunks = this.audioChunksList[0];
-        const audioFrames: AudioData[] = [];
-
-        // 解码所有 chunk 为 AudioData
-        await new Promise<void>((resolve) => {
-            const decoder = new AudioDecoder({
-                output: (frame: AudioData) => {
-                    audioFrames.push(frame);
-                },
-                error: (e) => console.error("AudioDecoder error", e),
-            });
-            decoder.configure({
-                codec: "opus",
-                sampleRate: 48000,
-                numberOfChannels: 2,
-            });
-            for (const chunk of chunks) {
-                decoder.decode(chunk);
-            }
-            decoder.flush().then(resolve);
-        });
-
-        if (audioFrames.length === 0) {
-            console.warn("No audioFrames decoded, audioBuffers will be empty.");
-            return;
-        }
-
-        console.log(audioFrames);
-
-        const audioContext = this.audioCtx;
-
-        const buffers: AudioBuffer[] = [];
-        for (let i = 0; i < audioFrames.length; i++) {
-            const audioData = audioFrames[i];
-            const frameFrames = audioData.numberOfFrames;
-            const frameChannels = audioData.numberOfChannels;
-            const sampleRate = audioData.sampleRate || 48000;
-
-            // 创建对应的 AudioBuffer
-            const audioBuffer = audioContext.createBuffer(
-                frameChannels,
-                frameFrames,
-                sampleRate,
-            );
-
-            const fl32data = new Float32Array(
-                audioData.numberOfFrames * audioData.numberOfChannels,
-            );
-            audioData.copyTo(fl32data, { planeIndex: 0, format: "f32" });
-            for (let ch = 0; ch < frameChannels; ch++) {
-                for (let f = 0; f < frameFrames; f++) {
-                    audioBuffer.getChannelData(ch)[f] =
-                        fl32data[f * frameChannels + ch];
-                }
-            }
-
-            // 释放 AudioData
-            audioData.close();
-            buffers.push(audioBuffer);
-        }
-
-        // 将生成的 AudioBuffer 列表保存用于播放（保持与现有播放逻辑兼容）
-        this.audioBuffers = buffers;
-    }
-
-    private pnow() {
-        return performance.now() as Milliseconds;
-    }
-
-    private clamp<T extends number>(v: T, min: T, max: T) {
-        return Math.max(min, Math.min(v, max)) as T;
-    }
-
-    private mathSub<T extends number>(a: T, b: T) {
-        return (a - b) as T;
-    }
-
-    play() {
-        if (this.playing) return;
-        this.playing = true;
-        this.startTime = this.mathSub(this.pnow(), sToMs(this._currentTime));
-        // 音频播放
-        if (this.audioBuffers.length > 0 && this.audioCtx) {
-            console.log(
-                "[play] audioBuffers exist, creating AudioBufferSourceNode...",
-            );
-            if (this.audioBufferSource) {
-                this.audioBufferSource.stop();
-            }
-            this.audioBufferSource = this.audioCtx.createBufferSource();
-            this.audioBufferSource.buffer = this.audioBuffers[0]; // todo 查找
-            this.audioBufferSource.connect(this.audioCtx.destination);
-            console.log(
-                "[play] audioBufferSource created, buffer duration:",
-                this.audioBufferSource.buffer.duration,
-            );
-            console.log("[play] start offset:", this._currentTime);
-            this.audioBufferSource.start(0, this._currentTime);
-            this.audioBufferSource.onended = () => {
-                // this.pause();
-                // this.onended?.();
-                console.log("play end");
-            };
-        } else {
-            console.warn(
-                "[play] No audioBuffers or audioCtx, cannot play audio.",
-            );
-        }
-        this.rafId = requestAnimationFrame(() => this.renderLoop());
-        this.onplay?.();
-    }
-
-    pause() {
-        this.playing = false;
-        if (this.rafId) cancelAnimationFrame(this.rafId);
-        if (this.audioBufferSource) {
-            this.audioBufferSource.stop();
-            this.audioBufferSource.disconnect();
-            this.audioBufferSource = null;
-        }
-        this.onpause?.();
-    }
-    seek(time: Seconds) {
-        // time 单位秒
-        this._currentTime = this.clamp(time, seconds(0), this._duration);
-        if (this.playing) {
-            this.pause();
-            this.play();
-        } else {
-        }
-        this.renderFrame(true);
-        this.currentFrameIdx = this.findFrameByTime(this._currentTime);
-        this.ontimeupdate?.();
-    }
-
-    get duration() {
-        return this._duration;
-    }
-
-    get currentTime(): Seconds {
-        if (this.playing) {
-            return msToS(this.mathSub(this.pnow(), this.startTime));
-        }
-        return this._currentTime;
-    }
-    set currentTime(t: Seconds) {
-        this.seek(t);
-    }
-
-    private findFrameByTime(time: Seconds): number {
-        // 输入秒，帧 timestamp 是微秒
-        const us = sToUs(time);
-        for (let i = 0; i < this.videoChunks.length; i++) {
-            if (this.videoChunks[i].timestamp >= us) {
-                return i;
-            }
-        }
-        return this.videoChunks.length - 1;
-    }
-
-    // 视频帧渲染主循环
-    private async renderLoop() {
-        if (!this.playing) return;
-        const now: Seconds = msToS(this.mathSub(this.pnow(), this.startTime));
-        this.ontimeupdate?.();
-        if (now >= this._duration) {
-            this.pause();
-            this.onended?.();
-            return;
-        }
-        const idx = this.findFrameByTime(now);
-        // 连续播放时不强制flush
-        const frame = await this.decodeToFrame(idx, false);
-        if (frame) {
-            this.ctx.drawImage(
-                frame,
-                0,
-                0,
-                this.canvas.width,
-                this.canvas.height,
-            );
-        }
-        this.rafId = requestAnimationFrame(() => this.renderLoop());
-    }
-
-    // 兼容 seek/暂停时的单帧渲染
-    private async renderFrame(force = false) {
-        if (!this.playing && !force) return;
-        const now: Seconds = this._currentTime;
-        const idx = this.findFrameByTime(now);
-        // seek/跳转时强制flush
-        const frame = await this.decodeToFrame(idx, true);
-        if (frame) {
-            this.ctx.drawImage(
-                frame,
-                0,
-                0,
-                this.canvas.width,
-                this.canvas.height,
-            );
-        }
-    }
-}
-
-const videoEl = new WebCodecsPlayer(videoPEl.el);
+const videoPEl = view().attr({ id: "video" }).addInto(mEl);
+const vpEl = view().attr({ id: "v_p" }).addInto(videoPEl);
+const videoEl = ele("video").style({ maxWidth: "none" }).addInto(vpEl).el;
+const segEl = view().attr({ id: "seg" }).addInto(vpEl);
 
 videoEl.onpause = () => {
     playEl.sv(true);
@@ -1350,181 +837,72 @@ videoEl.onplay = () => {
 };
 
 videoEl.ontimeupdate = () => {
-    tNtEl.sv(tFormat(sToMs(seconds(videoEl.currentTime))));
-    jdtEl.sv({ value: sToMs(seconds(videoEl.currentTime)) });
+    if (!editting) return;
+    tNtEl.sv(tFormat(getPlayT() - tStartEl.gv));
+    if (getPlayT() > tEndEl.gv) {
+        videoEl.pause();
+        tNtEl.sv(tTEl.gv);
+    }
+    jdtEl.sv(getPlayT());
 };
 
 videoEl.onended = () => {
-    tNtEl.sv(tTEl.gv);
-    jdtEl.sv({ value: jdtEl.gv.max });
+    if (playName < nameT.length - 1) {
+        playName++;
+        setVideo(playName);
+        videoEl.play();
+    } else {
+        tNtEl.sv(tTEl.gv);
+        jdtEl.svc = Number(jdtEl.el.max);
+    }
 };
 
-// 相关方法适配
-async function setVideo(videoData: VideoData) {
-    console.log("set video data", videoData);
-    await videoEl.setVideoData(videoData, outputV.width, outputV.height);
-    jdtEl.sv({ max: sToMs(videoEl.duration), value: milliseconds(0) });
-}
+const sEl = view().attr({ id: "s" }).class(Class.smallSize).addInto(mEl);
 
-const sEl = view("y")
-    .class(Class.smallSize)
-    .class(Class.gap)
-    .class()
-    .style({ flexShrink: 0 })
-    .addInto(mEl);
-
-const jdtEl = (<T = Milliseconds>() => {
-    const v = {
-        max: 0,
-        startTrim: 0,
-        endTrim: 0,
-        value: 0,
-    };
-
-    function limit(n: number) {
-        return Math.max(
-            0 + v.startTrim,
-            Math.min(n, Number(v.max - v.endTrim)),
-        );
-    }
-    function inputEvent() {
-        el.el.dispatchEvent(new Event("input"));
-    }
-
-    const el = view()
-        .style({
-            position: "relative",
-            height: "18px",
-            width: "100%",
-            overflow: "hidden",
-        })
-        .class(Class.deco);
-    const startRm = view()
-        .style({
-            position: "absolute",
-            height: "100%",
-            backgroundColor: "black",
-            left: 0,
-            top: 0,
-            pointerEvents: "none",
-            borderRadius: cssVar("o-padding"),
-        })
-        .bindSet((n: number, el) => {
-            const p = (n / v.max) * 100;
-            el.style.width = `${p}%`;
-        });
-    const endRm = view()
-        .style({
-            position: "absolute",
-            height: "100%",
-            backgroundColor: "black",
-            right: 0,
-            top: 0,
-            pointerEvents: "none",
-            borderRadius: cssVar("o-padding"),
-        })
-        .bindSet((n: number, el) => {
-            const p = (n / v.max) * 100;
-            el.style.width = `${p}%`;
-        });
-    const nowPoint = view()
-        .style({
-            position: "absolute",
-            height: "100%",
-            width: "2px",
-            backgroundColor: "red",
-            pointerEvents: "none",
-        })
-        .bindSet((n: number, el) => {
-            const p = (n / v.max) * 100;
-            el.style.left = `calc(${p}% - 1px)`;
-        });
-
-    el.add([startRm, endRm, nowPoint]);
-
-    trackPoint(el, {
-        start: (e) => {
-            return { data: { value: v.value }, x: 0, y: 0 };
-        },
-        ing: (p, _, { startData: { value } }) => {
-            const n = limit((p.x / el.el.clientWidth) * v.max + value);
-            nowPoint.sv(n);
-            v.value = n;
-            inputEvent();
-        },
-        end: (e, { moved }) => {
-            if (!moved) {
-                const x = e.clientX - el.el.getBoundingClientRect().left;
-                const n = limit((x / el.el.clientWidth) * v.max);
-                v.value = n;
-                nowPoint.sv(n);
-                inputEvent();
-            }
-        },
+const jdtEl = input("range")
+    .attr({ id: "jdt" })
+    .bindGet((el) => Number(el.value))
+    .bindSet((v: number, el) => {
+        el.value = String(v);
+    })
+    .on("input", () => {
+        setPlayT(jdtEl.gv);
     });
 
-    return el
-        .bindGet(() => ({
-            max: v.max as T,
-            startTrim: v.startTrim as T,
-            endTrim: v.endTrim as T,
-            value: v.value as T,
-        }))
-        .bindSet(
-            (nv: {
-                max?: T;
-                value?: T;
-                startTrim?: T;
-                endTrim?: T;
-            }) => {
-                if (nv.max !== undefined) {
-                    v.max = nv.max as number;
-                    const n = limit(v.value);
-                    nowPoint.sv(n);
-                }
-                if (nv.value !== undefined) {
-                    v.value = limit(nv.value as number);
-                    nowPoint.sv(v.value);
-                }
-                if (nv.startTrim !== undefined) {
-                    v.startTrim = nv.startTrim as number;
-                    startRm.sv(v.startTrim);
-                    const n = limit(v.value);
-                    nowPoint.sv(n);
-                }
-                if (nv.endTrim !== undefined) {
-                    v.endTrim = nv.endTrim as number;
-                    endRm.sv(v.endTrim);
-                    const n = limit(v.value);
-                    nowPoint.sv(n);
-                }
-            },
-        );
-})().on("input", () => {
-    setPlayT(jdtEl.gv.value);
-});
-
 const tStartEl = document.createElement("time-i") as time_i;
-const tNtEl = txt();
-const tTEl = txt();
+tStartEl.id = "t_start";
+const tNtEl = txt()
+    .attr({ id: "t_nt" })
+    .bindSet((v: string, el) => {
+        el.innerText = v;
+    });
+const tTEl = txt()
+    .attr({ id: "t_t" })
+    .bindSet((v: string, el) => {
+        el.innerText = v;
+        el.setAttribute("t", v);
+    })
+    .bindGet((el) => {
+        return el.getAttribute("t") ?? "";
+    });
 const tEndEl = document.createElement("time-i") as time_i;
+tEndEl.id = "t_end";
 
 tStartEl.oninput = () => {
-    const t = tStartEl.gv;
-    videoEl.currentTime = msToS(t);
-    tEndEl.max = jdtEl.gv.max;
-    jdtEl.sv({ startTrim: t });
-    tTEl.sv(tFormat(getAvailableDuration()));
+    const t = tStartEl.gv / 1000;
+    videoEl.currentTime = tEndEl.min = t;
+    jdtEl.el.min = String(t);
+    tTEl.sv(tFormat(tEndEl.gv - tStartEl.gv));
 };
 tEndEl.oninput = () => {
-    const t = tEndEl.gv;
-    videoEl.currentTime = mathSub(videoEl.duration, msToS(t));
-    tStartEl.max = jdtEl.gv.max;
-    jdtEl.sv({ endTrim: t });
-    tTEl.sv(tFormat(getAvailableDuration()));
+    const t = tEndEl.gv / 1000;
+    videoEl.currentTime = tStartEl.max = t;
+    jdtEl.el.max = String(t);
+    tTEl.sv(tFormat(tEndEl.gv - tStartEl.gv));
 };
 
 const playEl = check("play", [iconEl("recume"), iconEl("pause")])
+    .attr({ id: "v_play" })
     .style({
         display: "inline-flex",
     })
@@ -1535,33 +913,61 @@ const playEl = check("play", [iconEl("recume"), iconEl("pause")])
             videoPlay();
         }
     });
+const setEndEl = iconBEl("right").attr({ id: "b_t_end" }).on("click", setEnd);
+
+function setEnd() {
+    const last = timeL.at(-1) as number;
+    const max = last - timeL[0];
+    jdtEl.attr({ max: String(max) });
+    tEndEl.svc = tStartEl.max = tEndEl.max = last - timeL[0];
+}
 
 const saveEl = iconBEl("save")
-    .attr({ disabled: true })
+    .attr({ id: "save", disabled: true })
     .on("click", () => save());
 
-const proEl = (id: string) => view().add(view());
+const proEl = (id: string) =>
+    view()
+        .class("pro_p")
+        .add(
+            view()
+                .class("pro")
+                .attr({ id: `pr_${id}` }),
+        );
 
 const prTs = proEl("ts");
+const prClip = proEl("clip");
+const prJoin = proEl("join");
 
-updataPrEl();
+const prEl = {
+    ts: prTs,
+    clip: prClip,
+    join: prJoin,
+};
+
+updataPrEl(ffprocess);
+
+const logP = ele("details").attr({ id: "log_p" }).class("hide_log");
+const logText = ele("textarea").attr({ id: "log", cols: 30, rows: 10 });
+logP.add([ele("summary").add(t("FFmpeg 错误日志")), logText]);
 
 sEl.add([
     jdtEl,
-    view("x")
-        .class(Class.gap)
-        .style({ alignItems: "center" })
-        .add([
-            t("裁切头："),
-            tStartEl,
-            tNtEl.class(Class.mono),
-            txt(" / ").class(Class.mono),
-            tTEl.class(Class.mono),
-            playEl,
-            t("裁切尾："),
-            tEndEl,
-        ]),
-    view("x").class(Class.gap).add([saveEl, 格式El.el, prTs]),
+    ele("br"),
+    t("开始时间："),
+    tStartEl,
+    tNtEl,
+    " / ",
+    tTEl,
+    playEl,
+    t("结束时间："),
+    tEndEl,
+    setEndEl,
+    saveEl,
+    prTs,
+    prClip,
+    prJoin,
+    logP,
 ]);
 
 const devices = await navigator.mediaDevices.enumerateDevices();
@@ -1622,24 +1028,7 @@ if (store.get("录屏.摄像头.开启")) {
     }
 }
 
-const [codec, isDeAcc, isEnAcc] = ["vp8", false, false];
-const decoderVideoConfig = {
-    codec: codec,
-    hardwareAcceleration: isDeAcc ? "prefer-hardware" : "no-preference",
-} as const;
-const encoderVideoConfig = {
-    codec: codec,
-    hardwareAcceleration: isEnAcc ? "prefer-hardware" : "no-preference",
-} as const;
-const baseCodec = "vp8";
-
-const outputV = {
-    width: 1280,
-    height: 720,
-};
-
-const srcRate = store.get("录屏.转换.帧率");
-const bitrate = store.get("录屏.转换.码率") * 1024 * 1024;
+document.body.onresize = resize;
 
 renderOn("recordInit", async ([sourceId, r, screen_w, screen_h]) => {
     waitTip.remove();
@@ -1669,45 +1058,55 @@ renderOn("recordInit", async ([sourceId, r, screen_w, screen_h]) => {
         console.error(e);
     }
     if (!stream) return;
-
-    const chunks: VideoData = {
-        video: [],
-        audio: [],
-    };
-
-    outputV.width = r[2];
-    outputV.height = r[3];
-
-    recorder = new WebCodecsRecorder(
-        stream,
-        {
-            ...encoderVideoConfig,
-            width: outputV.width,
-            height: outputV.height,
-            framerate: srcRate,
-            bitrate: bitrate,
-        },
-        { codec: "opus", sampleRate: 48000, numberOfChannels: 2 },
-        r,
-    );
+    let chunks: Blob[] = [];
+    recorder = new MediaRecorder(stream, {
+        videoBitsPerSecond: store.get("录屏.视频比特率") * 10 ** 6,
+        mimeType: "video/webm",
+    });
     recorder.ondataavailable = (e) => {
-        chunks.video = e.video;
-        chunks.audio = e.audio;
+        chunks.push(e.data);
     };
+
     const fileName = String(Date.now());
     tmpPath = path.join(os.tmpdir(), "eSearch/", fileName);
     output = path.join(tmpPath, "output");
-
-    async function stopRecord() {
-        showControl();
-        await setVideo(chunks);
-        recordData = chunks;
-        clipV();
+    fs.mkdirSync(tmpPath);
+    fs.mkdirSync(output);
+    let clipName = 0;
+    function save(f: () => void) {
+        const b = new Blob(chunks, { type: "video/webm" });
+        console.log(chunks, b);
+        const reader = new FileReader();
+        reader.readAsArrayBuffer(b);
+        reader.onloadend = (_e) => {
+            const baseName = String(clipName);
+            const baseName2 = `${baseName}.${type}`;
+            const p = path.join(tmpPath, baseName);
+            const crop =
+                type === "gif" && store.get("录屏.转换.高质量gif")
+                    ? `[in]crop=${rect[2]}:${rect[3]}:${rect[0]}:${rect[1]},split[split1][split2];[split1]palettegen=stats_mode=single[pal];[split2][pal]paletteuse=new=1`
+                    : `crop=${rect[2]}:${rect[3]}:${rect[0]}:${rect[1]}`;
+            const args = ["-i", p, "-vf", crop, path.join(output, baseName2)];
+            fs.writeFile(p, Buffer.from(reader.result as string), (_err) => {
+                runFfmpeg("ts", clipName, args);
+                chunks = [];
+                if (f) f();
+                clipName++;
+            });
+        };
     }
 
     recorder.onstop = () => {
-        renderSend("recordStop", []);
-        stopRecord();
+        (nameT.at(-1) as (typeof nameT)[0]).e = getT();
+        if (stop) {
+            renderSend("recordStop", []);
+            save(showControl);
+            console.log(nameT);
+        } else {
+            save(() => {});
+            recorder.start();
+            nameT.push({ s: getT(), e: Number.NaN });
+        }
     };
 
     if (store.get("录屏.自动录制") === true) {
@@ -1730,6 +1129,16 @@ renderOn("recordInit", async ([sourceId, r, screen_w, screen_h]) => {
 
 renderOn("recordStartStop", () => {
     startStop.el.click();
+});
+
+renderOn("recordSavePathReturn", ([arg]) => {
+    savePath = arg;
+    if (isTsOk)
+        clip()
+            .then(() => joinAndSave(arg))
+            .catch(() => {
+                isClipRun = false;
+            });
 });
 
 renderOn("recordState", ([s]) => {

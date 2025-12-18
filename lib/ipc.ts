@@ -49,7 +49,7 @@ type Message = {
     clip_mac_app: () => { canceled: boolean; filePaths: string[] };
     clip_record: (
         rect: [number, number, number, number],
-        id: number,
+        id: string,
         w: number,
         h: number,
         r: number,
@@ -131,7 +131,7 @@ type Message = {
     recordTime: (time: string) => void;
     recordCamera: (camera: boolean) => void;
     recordState: (state: "stop" | "pause") => void;
-    recordSavePath: (ext: string) => string;
+    recordSavePath: (ext: string) => void;
     dingShare: (
         data:
             | { type: "close"; id: string; closeAll: boolean }
@@ -158,6 +158,7 @@ type Message = {
         rect: { x: number; y: number; w: number; h: number },
     ) => void;
     dingMouse: (x: number, y: number) => void;
+    recordSavePathReturn: (path: string) => void; // todo remove
     editorInit: (name: number, list: MainWinType) => void;
     browserNew: (id: number, url: string) => void;
     browserTitle: (id: number, title: string) => void;

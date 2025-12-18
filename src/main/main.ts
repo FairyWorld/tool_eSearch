@@ -1229,8 +1229,31 @@ let _recorder: BrowserWindow;
 let _recorderTipWin: BrowserWindow;
 function createRecorderWindow(
     rect0: [number, number, number, number],
-    screenx: { id: number; w: number; h: number; r: number },
+    screenx: { id: string; w: number; h: number; r: number },
 ) {
+    const s = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const ratio = screenx.r;
+    const p = {
+        x: screen.getCursorScreenPoint().x,
+        y: screen.getCursorScreenPoint().y,
+    };
+    const rect = rect0.map((v) => v / ratio);
+    const sx = s.bounds.x;
+    const sy = s.bounds.y;
+    const sx1 = sx + s.bounds.width;
+    const sy1 = sy + s.bounds.height;
+    const hx = sx + rect[0] + rect[2] / 2;
+    const hy = sy + rect[1] + rect[3] / 2;
+    const w = recorderWinW;
+    const h = recorderWinH;
+    let x = p.x <= hx ? sx + rect[0] : sx + rect[0] + rect[2] - w;
+    let y = p.y <= hy ? sy + rect[1] - h - 8 : sy + rect[1] + rect[3] + 8;
+    x = Math.max(x, sx);
+    x = Math.min(x, sx1 - w);
+    y = Math.max(y, sy);
+    y = Math.min(y, sy1 - h);
+    x = Math.round(x);
+    y = Math.round(y);
     const recorder = new BrowserWindow(baseWinConfig());
     _recorder = recorder;
     rendererPath(recorder, "recorder.html");
@@ -1253,9 +1276,7 @@ function createRecorderWindow(
 
     recorder.webContents.on("did-finish-load", () => {
         desktopCapturer.getSources({ types: ["screen"] }).then((sources) => {
-            let dId = sources.find(
-                (s) => s.display_id === String(screenx.id),
-            )?.id;
+            let dId = sources.find((s) => s.display_id === screenx.id)?.id;
             if (!dId) dId = sources[0].id;
             mainSend(recorder.webContents, "recordInit", [
                 dId,
@@ -1272,14 +1293,11 @@ function createRecorderWindow(
         }
     });
 
-    const sall = screen.getAllDisplays();
-    const s = sall.find((i) => i.id === screenx.id) ?? sall[0];
-    const ratio = screenx.r;
     const border = 2;
     const rect1 = rect0.map((v) => Math.round(v / ratio));
     const recorderTipWin = new BrowserWindow({
-        x: rect1[0] + s.bounds.x - border,
-        y: rect1[1] + s.bounds.y - border,
+        x: rect1[0] - border,
+        y: rect1[1] - border,
         width: rect1[2] + border * 2,
         height: rect1[3] + border * 2 + 24,
         transparent: true,
@@ -1326,30 +1344,34 @@ mainOnReflect("recordState", () => {
     if (checkWin(_recorder)) return [_recorder.webContents];
     return [];
 });
-mainOn("recordSavePath", async ([ext]) => {
+mainOn("recordSavePath", ([ext]) => {
     const savedPath = store.get("保存.保存路径.视频") || "";
-    const x = await dialog.showSaveDialog({
-        title: t("选择要保存的位置"),
-        defaultPath: savedPath
-            ? join(savedPath, `${getFileName()}.${ext}`)
-            : undefined,
-        filters: [{ name: t("视频"), extensions: [ext] }],
-    });
-
-    if (x.filePath) {
-        let fpath = x.filePath;
-        if (!fpath.includes(".")) {
-            fpath += `.${ext}`;
-        }
-        if (checkWin(_recorder)) return fpath;
-    } else {
-        new Notification({
-            title: `${app.name} ${t("保存视频失败")}`,
-            body: t("用户已取消保存"),
-            icon: `${runPath}/assets/logo/64x64.png`,
-        }).show();
-    }
-    return "";
+    dialog
+        .showSaveDialog({
+            title: t("选择要保存的位置"),
+            defaultPath: savedPath
+                ? join(savedPath, `${getFileName()}.${ext}`)
+                : undefined,
+            filters: [{ name: t("视频"), extensions: [ext] }],
+        })
+        .then(async (x) => {
+            if (x.filePath) {
+                let fpath = x.filePath;
+                if (!fpath.includes(".")) {
+                    fpath += `.${ext}`;
+                }
+                if (checkWin(_recorder))
+                    mainSend(_recorder.webContents, "recordSavePathReturn", [
+                        fpath,
+                    ]);
+            } else {
+                new Notification({
+                    title: `${app.name} ${t("保存视频失败")}`,
+                    body: t("用户已取消保存"),
+                    icon: `${runPath}/assets/logo/64x64.png`,
+                }).show();
+            }
+        });
 });
 
 function createSuperRecorderWindow() {
