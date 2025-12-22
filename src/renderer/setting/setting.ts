@@ -1635,11 +1635,11 @@ const s: Partial<settingItem<SettingPath>> = {
         el: () => xSwitch(),
     },
     "额外截屏器.命令": {
-        name: "命令",
+        name: "截屏命令",
         el: () => input(),
     },
     "额外截屏器.位置": {
-        name: "位置",
+        name: "截屏保存位置",
         el: () => xPath(false),
     },
     自定义屏幕属性: {
