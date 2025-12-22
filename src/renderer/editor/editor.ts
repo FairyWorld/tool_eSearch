@@ -1672,7 +1672,7 @@ function showT(st: string, m: setting["主页面"]["模式"]) {
     if (m === "auto" || t === "") {
         // 严格模式
         if (isLink(t, true)) {
-            if (自动打开链接) openUrl(t);
+            if (自动打开链接) openLink(t);
         } else {
             const language =
                 (t.match(/[\u4e00-\u9fa5]/g)?.length ?? 0) >=
@@ -1695,6 +1695,15 @@ function showT(st: string, m: setting["主页面"]["模式"]) {
     editor.selectAll();
 }
 
+function openUrl(url: string) {
+    const 内建url = url.startsWith("translate");
+    if (浏览器打开 && !内建url) {
+        shell.openExternal(url);
+    } else {
+        renderSend("open_this_browser", [windowName, url]);
+    }
+}
+
 function openTab(id: "search" | "translate") {
     let url = "";
     const s = editor.selections.get() || editor.get(); // 要么全部，要么选中
@@ -1703,24 +1712,16 @@ function openTab(id: "search" | "translate") {
         encodeURIComponent(s),
     );
 
-    if (浏览器打开) {
-        shell.openExternal(url);
-    } else {
-        renderSend("open_this_browser", [windowName, url]);
-    }
+    openUrl(url);
 }
 
-function openUrl(slink: string) {
+function openLink(slink: string) {
     let link = slink.replace(/[(^\s)(\s$)]/g, "");
     if (link.match(/\/\//g) == null) {
         link = `https://${link}`;
     }
 
-    if (浏览器打开) {
-        shell.openExternal(link);
-    } else {
-        renderSend("open_this_browser", [windowName, link]);
-    }
+    openUrl(link);
 }
 
 /**搜索翻译按钮 */
@@ -1871,7 +1872,7 @@ renderOn("editorInit", ([name, list]) => {
         searchImg(list.content, list.arg0, (err, url) => {
             if (url) {
                 editor.push("");
-                openUrl(url);
+                openLink(url);
                 if (浏览器打开) {
                     // 主页面作为临时上传图片的工具，应自动关闭，不管有没有设置自动关闭标签
                     closeWindow();
@@ -2056,7 +2057,7 @@ async function edit(arg: EditToolsType) {
         }
         case "link": {
             const url = editor.selections.get();
-            openUrl(url);
+            openLink(url);
             break;
         }
         case "search":
