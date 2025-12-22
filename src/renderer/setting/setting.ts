@@ -3088,7 +3088,9 @@ function xColor() {
 
 function xPath(dir: boolean) {
     const el = view("x").class(Class.group).style({ width: baseWidth });
-    const i = input();
+    const i = input().on("input", () => {
+        el.el.dispatchEvent(new CustomEvent("input"));
+    });
     const b = button(iconEl("file"))
         .on("click", () => {
             const path = renderSendSync("selectPath", [
