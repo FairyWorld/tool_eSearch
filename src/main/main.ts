@@ -580,13 +580,17 @@ app.whenReady().then(() => {
             {
                 label: t("文字识别（OCR）"),
                 click: () => {
-                    sendCaptureEvent(undefined, "ocr");
+                    setTimeout(() => {
+                        sendCaptureEvent(undefined, "ocr");
+                    }, store.get("主搜索功能.截屏搜索延迟"));
                 },
             },
             {
                 label: t("以图搜图"),
                 click: () => {
-                    sendCaptureEvent(undefined, "search");
+                    setTimeout(() => {
+                        sendCaptureEvent(undefined, "search");
+                    }, store.get("主搜索功能.截屏搜索延迟"));
                 },
             },
             {
