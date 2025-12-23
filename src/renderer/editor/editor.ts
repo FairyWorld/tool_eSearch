@@ -63,7 +63,7 @@ import type { IconType } from "../../iconTypes";
 import { runAI } from "../lib/ai";
 import { defaultOcrId, loadOCR } from "../ocr/ocr";
 import { rotateImg } from "esearch-ocr";
-import { typedEntries, tryD, safeJSONParse } from "../../../lib/utils";
+import { typedEntries, tryD, safeJSONParse, tryx } from "../../../lib/utils";
 
 type SpellItem = {
     index: number;
@@ -116,7 +116,13 @@ const historyList: { [key: string]: { text: string } } =
 
 let fileWatcher: FSWatcher | null = null;
 
-let lo: import("esearch-ocr").initType;
+const locr: {
+    runner: import("esearch-ocr").initType | null;
+    type: string;
+} = {
+    runner: null,
+    type: "",
+};
 
 const 浏览器打开 = store.get("浏览器中打开");
 
@@ -2541,20 +2547,16 @@ async function localOcr(
 ) {
     try {
         task.l("ocr_load");
-        let x: ReturnType<typeof loadOCR> = null;
-        try {
-            x = loadOCR(store, type);
-        } catch (error) {
+        if (type !== locr.type || !locr.runner) {
+            const [x, error] = tryx(() => loadOCR(store, type));
             if (error instanceof Error) {
                 if (error.message.includes("A dynamic link library")) {
                     const x = `${t("文字识别需要VS运行库才能正常使用")}\n${t("请下载并安装 Microsoft Visual C++ Runtime")}\nhttps://aka.ms/vs/17/release/vc_redist.${process.arch}.exe`;
-                    callback(new Error(x), null);
+                    return callback(new Error(x), null);
                 }
-            }
-            return callback(error as Error, null);
-        }
-        if (!x) return callback(new Error("未找到OCR模型"), null);
-        if (!lo) {
+            } else if (error) return callback(error as Error, null);
+            if (!x) return callback(new Error("未找到OCR模型"), null);
+
             x.config.det.on = (dr) => {
                 if (dr.length <= 2) return;
                 mainSectionEl.style({ gap: cssVar("o-padding") });
@@ -2598,10 +2600,12 @@ async function localOcr(
                     }, 400);
                 }
             };
-            lo = await x.ocr.init(x.config);
+            locr.runner = await x.ocr.init(x.config);
+            locr.type = type;
         }
         task.l("ocr_s");
-        lo.ocr(arg)
+        locr.runner
+            .ocr(arg)
             .then((l) => {
                 console.log(l);
                 let t = "";
