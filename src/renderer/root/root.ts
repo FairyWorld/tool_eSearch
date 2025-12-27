@@ -186,6 +186,13 @@ const Class = {
             },
         },
     ),
+    hide: addClass(
+        {
+            opacity: "0",
+            pointerEvents: "none",
+        },
+        {},
+    ),
 };
 
 Class.button = `${Class.click} ${Class.hover}`;

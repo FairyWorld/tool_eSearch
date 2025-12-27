@@ -30,7 +30,7 @@ initStyle(store);
 setTitle(t("贴图"));
 
 let lo: import("esearch-ocr").initType;
-let translateE = async (input: string[]) => input;
+let translateE: ((input: string[]) => Promise<string[]>) | undefined;
 
 function iconEl(src: IconType) {
     return image(getImgUrl(`${src}.svg`), "icon").class("icon");
@@ -245,6 +245,21 @@ const setNewDing = (
         }
     };
 
+    async function translate() {
+        ocrTransStateBar.el.classList.remove(Class.hide);
+        ocrTransStateBar.sv("正在OCR识别...");
+        const p = await preTranAndOcr(url);
+        ocrTransStateBar.sv("正在翻译...");
+        try {
+            await transAndDraw(div, p);
+            ocrTransStateBar.class(Class.hide);
+        } catch (error) {
+            if (error instanceof UnConfigTranslateError) {
+                ocrTransStateBar.sv("未配置翻译引擎");
+            } else ocrTransStateBar.sv("翻译失败");
+        }
+    }
+
     const transB = button(iconEl("translate"))
         .attr({ title: "翻译" })
         .on("click", async () => {
@@ -256,8 +271,7 @@ const setNewDing = (
                     div.query("canvas")?.style({ display: "none" });
                 } else {
                     if (!d.translation) {
-                        const p = await translate(url);
-                        transAndDraw(div, p);
+                        await translate();
                     }
                     div.query("canvas")?.style({ display: "" });
                 }
@@ -302,6 +316,33 @@ const setNewDing = (
                     }),
             ]),
     ]);
+
+    const ocrTransStateBarText = txt();
+    const ocrTransStateBar = view("x")
+        .class(Class.glassBar)
+        .class(Class.hide)
+        .style({
+            padding: "4px",
+            gap: "4px",
+            bottom: "4px",
+            borderRadius: "4px",
+            alignItems: "center",
+            position: "absolute",
+            zIndex: 2,
+            left: "50%",
+            transform: "translateX(-50%)",
+        })
+        .add([
+            ocrTransStateBarText,
+            button(iconEl("close"))
+                .attr({ title: "关闭" })
+                .on("click", () => {
+                    ocrTransStateBar.class(Class.hide);
+                }),
+        ])
+        .bindSet((v: string) => {
+            ocrTransStateBarText.sv(v);
+        });
     // 双击行为
     div.el.ondblclick = () => {
         if (store.get("贴图.窗口.双击") === "归位") back(wid);
@@ -323,7 +364,7 @@ const setNewDing = (
             transform(wid, Number(e.key) - 1);
         }
     });
-    div.add(toolBar).add(imageP);
+    div.add(toolBar).add(imageP).add(ocrTransStateBar);
     photoEl.add(div);
 
     // dock
@@ -332,9 +373,7 @@ const setNewDing = (
     resize(wid, 1, 0, 0);
 
     if (type === "translate") {
-        translate(url).then((p) => {
-            transAndDraw(div, p);
-        });
+        translate();
     }
 
     return {
@@ -344,7 +383,7 @@ const setNewDing = (
     };
 };
 
-async function translate(url: string) {
+async function preTranAndOcr(url: string) {
     const transE = store.get("翻译.翻译器");
 
     if (transE.length > 0) {
@@ -511,6 +550,8 @@ async function ocr(img: string) {
     return p.columns.flatMap((c) => c.parragraphs);
 }
 
+class UnConfigTranslateError extends Error {}
+
 async function transAndDraw(
     el: ElType<HTMLElement>,
     p: Awaited<ReturnType<typeof ocr>>,
@@ -529,6 +570,7 @@ async function transAndDraw(
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(image, 0, 0);
     console.log(p);
+    if (!translateE) throw new UnConfigTranslateError();
     const tr = await translateE(p.map((i) => i.parse.text));
     console.log(tr);
 
