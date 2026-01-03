@@ -81,4 +81,5 @@ execSync(`tar -czvf eSearch_${packageJSON.version}.aur e-search`, {
 
 execSync(`sha512sum eSearch_${packageJSON.version}.aur`, {
     stdio: "inherit",
+    cwd: __dirname,
 });
