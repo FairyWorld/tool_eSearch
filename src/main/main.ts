@@ -1278,7 +1278,7 @@ function createRecorderWindow(
         }
     });
 
-    recorder.webContents.on("did-finish-load", () => {
+    mainOn("recorderReady", () => {
         desktopCapturer.getSources({ types: ["screen"] }).then((sources) => {
             let dId = sources.find((s) => s.display_id === screenx.id)?.id;
             if (!dId) dId = sources[0].id;

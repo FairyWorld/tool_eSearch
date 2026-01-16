@@ -119,6 +119,7 @@ type Message = {
     setAutoStart: (value: boolean) => void;
     theme: (t: NativeTheme["themeSource"]) => void;
     dingIgnore: (ignore: boolean) => void;
+    recorderReady: ()=> void,
     recordInit: (
         id: string,
         r: [number, number, number, number],
