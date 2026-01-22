@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@inquirer/prompts": "^7.6.0",
+    "@inquirer/prompts": "^8.2.0",
     "@types/bmp-js": "^0.1.2",
     "@types/chroma-js": "^3.1.1",
     "@types/diff-match-patch": "^1.0.34",
