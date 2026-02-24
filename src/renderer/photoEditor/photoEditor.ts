@@ -210,6 +210,7 @@ const controls = frame("sidebar", {
                 { value: "png", name: noI18n("PNG") },
                 { value: "jpg", name: noI18n("JPEG") },
                 { value: "webp", name: noI18n("WebP") },
+                { value: "bmp", name: noI18n("BMP") },
             ]).sv(
                 (() => {
                     const format = store.get("保存.默认格式");
@@ -361,6 +362,7 @@ function getImg(base64 = false) {
         png: "image/png",
         jpg: "image/jpeg",
         webp: "image/webp",
+        bmp: "image/bmp",
     };
     const url = x.toDataURL(
         type[controls.els.formart.gv],
