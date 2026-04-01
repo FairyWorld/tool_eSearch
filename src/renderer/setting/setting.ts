@@ -75,6 +75,7 @@ import { xget, xset } from "../../../lib/store/parse";
 import { isDeepStrictEqual } from "../lib/isDeepStrictEqual";
 import { safeJSONParse, tryD, tryx } from "../../../lib/utils";
 import { githubMirrorList } from "../../../lib/github_mirror";
+import { runAI } from "../lib/ai";
 
 let yauzl: typeof import("yauzl") | null = null;
 
@@ -583,6 +584,8 @@ const s: Partial<settingItem<SettingPath>> = {
                         item.supportVision,
                     );
 
+                    const testResult = txt();
+
                     dialogB(
                         dialog,
                         [
@@ -596,6 +599,41 @@ const s: Partial<settingItem<SettingPath>> = {
                                     configEl,
                                 ]),
                                 label([supportVision, "支持图像识别"]),
+                                view().add([
+                                    button("测试").on("click", async () => {
+                                        testResult.sv("测试中...");
+                                        const [r, error] = tryx(async () => {
+                                            const t = runAI(
+                                                [
+                                                    {
+                                                        role: "user",
+                                                        content: {
+                                                            text: "你好",
+                                                        },
+                                                    },
+                                                ],
+                                                {
+                                                    config: configEl.gv,
+                                                    url: urlEl.gv,
+                                                    key: keyEl.gv,
+                                                },
+                                            ).text;
+
+                                            await t;
+                                        });
+                                        await r;
+                                        if (error) {
+                                            testResult.sv(
+                                                noI18n(
+                                                    `${t("测试失败：")} ${error.message}`,
+                                                ),
+                                            );
+                                        } else {
+                                            testResult.sv("测试成功");
+                                        }
+                                    }),
+                                    testResult,
+                                ]),
                             ]),
                         ],
                         () => resolve(null),
