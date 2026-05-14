@@ -36,14 +36,7 @@ function init(
     _command = command.c;
     if (command.path) commandSavePath = command.path;
     if (t) _t = t;
-    if (process.platform === "linux" && process.arch === "arm64") {
-        if (!_command) {
-            d({
-                message: `${_t("Linux arm64 平台需要额外截屏软件")}\n${_t("请在 设置-高级 中设置截屏命令")}`,
-                buttons: [_t("确定")],
-            } as MessageBoxSyncOptions);
-        }
-    } else if (!_command)
+    if (!_command)
         try {
             Screenshots = require("node-screenshots");
         } catch (error) {
@@ -104,15 +97,6 @@ function dispaly2screen(
     allScreens = [];
     let buffer = imgBuffer;
 
-    if (!buffer && process.platform === "linux" && process.arch === "arm64") {
-        if (!_command) {
-            d({
-                message: _t("Linux arm64 平台需要额外截屏软件"),
-                buttons: [_t("确定")],
-            } as MessageBoxSyncOptions);
-            return { screen: [], window: [], type: "normal" };
-        }
-    }
     if (!buffer && _command) {
         const fs = require("node:fs") as typeof import("node:fs");
         // biome-ignore format:

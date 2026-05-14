@@ -158,7 +158,7 @@ const beforePack = async () => {
         }
     }
     // 指定arch pnpm似乎不支持，手动安装和剔除
-    if ((platform === "win32" || platform === "darwin") && arch === "arm64") {
+    if (arch === "arm64") {
         execSync("pnpm add node-screenshots --force");
         const list = [
             "darwin-arm64",
@@ -166,6 +166,7 @@ const beforePack = async () => {
             "darwin-universal",
             "linux-x64-gnu",
             "linux-x64-musl",
+            "linux-arm64-gnu",
             "win32-ia32-msvc",
             "win32-x64-msvc",
             "win32-arm64-msvc",
@@ -178,6 +179,10 @@ const beforePack = async () => {
         if (platform === "darwin") {
             rmList = list.filter((i) => !i.startsWith("darwin"));
             rmList.push("darwin-x64");
+        }
+        if (platform === "linux") {
+            rmList = list.filter((i) => !i.startsWith("linux"));
+            rmList.push("linux-x64-gnu", "linux-x64-musl");
         }
         console.log(`移除${rmList.join(", ")}`);
         for (const i of rmList) {
