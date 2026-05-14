@@ -157,40 +157,6 @@ const beforePack = async () => {
             }
         }
     }
-    // 指定arch pnpm似乎不支持，手动安装和剔除
-    if (arch === "arm64") {
-        execSync("pnpm add node-screenshots --force");
-        const list = [
-            "darwin-arm64",
-            "darwin-x64",
-            "darwin-universal",
-            "linux-x64-gnu",
-            "linux-x64-musl",
-            "linux-arm64-gnu",
-            "win32-ia32-msvc",
-            "win32-x64-msvc",
-            "win32-arm64-msvc",
-        ];
-        let rmList = [];
-        if (platform === "win32") {
-            rmList = list.filter((i) => !i.startsWith("win32"));
-            rmList.push("win32-ia32-msvc", "win32-x64-msvc");
-        }
-        if (platform === "darwin") {
-            rmList = list.filter((i) => !i.startsWith("darwin"));
-            rmList.push("darwin-x64");
-        }
-        if (platform === "linux") {
-            rmList = list.filter((i) => !i.startsWith("linux"));
-            rmList.push("linux-x64-gnu", "linux-x64-musl");
-        }
-        console.log(`移除${rmList.join(", ")}`);
-        for (const i of rmList) {
-            try {
-                execSync(`pnpm uninstall node-screenshots-${i}`);
-            } catch (error) {}
-        }
-    }
 };
 
 /**
@@ -351,6 +317,31 @@ for (const i of otherPlatform) {
     files?.push(`!node_modules/uiohook-napi/prebuilds/${i}-x64`);
 }
 files?.push(`!node_modules/uiohook-napi/prebuilds/${platform}-${archFilter}`);
+
+// 移除 node-screenshots其他平台架构
+const nodeScreenshotsList = [
+    "win32-x64-msvc",
+    "win32-ia32-msvc",
+    "win32-arm64-msvc",
+    "linux-x64-gnu",
+    "linux-x64-musl",
+    "linux-arm64-gnu",
+    "linux-loong64-gnu",
+    "darwin-x64",
+    "darwin-arm64",
+];
+for (const i of nodeScreenshotsList) {
+    for (const j of otherPlatform) {
+        if (i.startsWith(j)) {
+            files?.push(`!node_modules/node-screenshots-${i}`);
+        }
+    }
+    if (i.startsWith(platform)) {
+        if (!i.startsWith(`${platform}-${arch}`)) {
+            files?.push(`!node_modules/node-screenshots-${i}`);
+        }
+    }
+}
 
 const ignoreDir = [
     ".*",
