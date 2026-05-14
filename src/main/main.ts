@@ -311,6 +311,7 @@ async function argRun(c: string[], first?: boolean) {
             "",
             `[${t("动作")}] [i] [more]`,
             t("动作"),
+            ["c", 0, t("截屏")],
             [["s", "save"], 0, t("保存到路径或剪贴板")],
             [["p", "path"], 1, t("保存的路径")],
             ["n", 1, t("连拍数")],
@@ -325,6 +326,7 @@ async function argRun(c: string[], first?: boolean) {
             [["d", "ding"], 0, t("贴图")],
             [["t", "text"], 0, t("主页面打开文字")],
             ["[mode]", 1, ""],
+            ["setting", 0, t("设置")],
             "",
             t("文字处理模式，不设置则自动判断"),
             ["trans", 0, t("翻译")],
@@ -453,6 +455,10 @@ async function argRun(c: string[], first?: boolean) {
             content: argv.t || argv.text,
             mode: textMode,
         });
+    } else if (argv.c) {
+        showPhoto();
+    } else if (argv.setting) {
+        createSettingWindow();
     } else {
         const path = argv._.find((i) => i.match(/(\.png)|(\.jpg)|(\.svg)$/i));
         if (path) showPhoto(path);
