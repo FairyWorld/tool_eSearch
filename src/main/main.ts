@@ -1877,6 +1877,8 @@ async function createSettingWindow() {
     }
     settingWindow = new BrowserWindow({
         minWidth: 600,
+        width: 900,
+        height: 700,
         ...baseWinConfig(),
     });
 
