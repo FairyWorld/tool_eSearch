@@ -1155,3 +1155,5 @@ renderOn("recordState", ([s]) => {
         }
     }
 });
+
+renderSend("recorderReady", []);
